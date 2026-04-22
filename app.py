@@ -1,7 +1,6 @@
 """
-Political Speech Logic Checker — Local Prolog Server
-No API key required. Receives pre-classified claims+features from the UI,
-runs SWI-Prolog rule reasoning, returns fallacy results.
+LogicWatch — Flask + SWI-Prolog backend
+Deployed on Render via Docker
 """
 
 import os
@@ -36,7 +35,7 @@ FALLACY_COLORS = {
 PROLOG_KB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fallacies.pl")
 
 
-def run_prolog_analysis(claims: list[dict], features: dict[int, list[str]]) -> dict:
+def run_prolog_analysis(claims, features):
     fact_lines = []
     for claim in claims:
         cid = claim["id"]
@@ -80,7 +79,7 @@ def run_prolog_analysis(claims: list[dict], features: dict[int, list[str]]) -> d
     finally:
         os.unlink(tmp_path)
 
-    fallacy_map: dict[int, list[dict]] = {c["id"]: [] for c in claims}
+    fallacy_map = {c["id"]: [] for c in claims}
     for line in output.splitlines():
         if line.startswith("FALLACY|"):
             parts = line.split("|", 3)
@@ -120,6 +119,16 @@ def run_prolog_analysis(claims: list[dict], features: dict[int, list[str]]) -> d
     }
 
 
+@app.route("/")
+def index():
+    return jsonify({"status": "LogicWatch API running", "endpoints": ["/health", "/reason"]})
+
+
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"})
+
+
 @app.route("/reason", methods=["POST"])
 def reason():
     data = request.get_json()
@@ -135,13 +144,6 @@ def reason():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/health", methods=["GET"])
-def health():
-    return jsonify({"status": "ok"})
-
-
 if __name__ == "__main__":
-
-
     port = int(os.environ.get("PORT", 5000))
     app.run(debug=False, host="0.0.0.0", port=port)
