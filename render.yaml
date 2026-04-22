@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: logicwatch
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
