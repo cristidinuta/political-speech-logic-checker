@@ -1,96 +1,61 @@
-% ============================================================
-%  FALLACY DETECTION KNOWLEDGE BASE
-%  Logic Checker for Political Speeches
-%  Uses SWI-Prolog with dynamic facts asserted per analysis run
-% ============================================================
+:- discontiguous claim/1.
+:- discontiguous text/2.
+:- discontiguous type/2.
+:- discontiguous target/2.
+:- discontiguous supports/3.
 
-:- discontiguous fallacy/3.
-:- discontiguous claim/2.
-:- discontiguous has_feature/2.
-:- dynamic claim/2.
-:- dynamic has_feature/2.
+% =========================
+% Fallacy rules
+% =========================
 
-% ============================================================
-%  FEATURE PREDICATES
-%  Features are asserted dynamically by Python based on
-%  Claude's NLP analysis of each atomic sentence.
-%  has_feature(ClaimId, Feature)
-% ============================================================
+% Ad hominem: personal attack used to dismiss the argument or speaker.
+fallacy(ad_hominem, C1, C2) :-
+    type(C1, attack_target),
+    type(C2, broad_rejection),
+    target(C1, Person),
+    target(C2, Person),
+    Person \= unknown,
+    supports(C1, C2, _).
 
-% ============================================================
-%  FALLACY RULES
-%  fallacy(ClaimId, FallacyType, Explanation)
-% ============================================================
+% Guilt by bad-act expansion: a single bad act is stretched into total unreliability.
+fallacy(hasty_generalization, C1, C2) :-
+    type(C1, single_bad_act),
+    type(C2, universal_claim),
+    supports(C1, C2, _).
 
-% --- AD HOMINEM ---
-% Attacking the person rather than their argument
-fallacy(Id, ad_hominem, 'Attacks the character or personal traits of an opponent rather than addressing their actual argument.') :-
-    claim(Id, _),
-    has_feature(Id, attacks_person),
-    has_feature(Id, ignores_argument).
+fallacy(hasty_generalization, C1, C2) :-
+    type(C1, single_bad_act),
+    type(C2, broad_rejection),
+    supports(C1, C2, _).
 
-% --- FALSE DILEMMA ---
-% Presenting only two options when more exist
-fallacy(Id, false_dilemma, 'Presents only two possible options, ignoring other valid alternatives.') :-
-    claim(Id, _),
-    has_feature(Id, binary_choice),
-    \+ has_feature(Id, acknowledges_alternatives).
+% False dilemma: presents only two options.
+fallacy(false_dilemma, C1) :-
+    type(C1, either_or).
 
-% --- SLIPPERY SLOPE ---
-% Assuming one event will lead to extreme consequences without justification
-fallacy(Id, slippery_slope, 'Assumes that one event will inevitably lead to extreme negative consequences without sufficient justification.') :-
-    claim(Id, _),
-    has_feature(Id, chain_of_consequences),
-    has_feature(Id, extreme_endpoint),
-    \+ has_feature(Id, causal_evidence).
+% Slippery slope: if X then catastrophic end-state.
+fallacy(slippery_slope, C1) :-
+    type(C1, conditional_catastrophe).
 
-% --- HASTY GENERALIZATION ---
-% Drawing broad conclusions from limited examples
-fallacy(Id, hasty_generalization, 'Draws a broad general conclusion from a limited or unrepresentative sample of evidence.') :-
-    claim(Id, _),
-    has_feature(Id, broad_generalization),
-    has_feature(Id, limited_sample).
+% Appeal to authority: authority reference used as stand-alone reason.
+fallacy(appeal_to_authority, C1, C2) :-
+    type(C1, authority_claim),
+    supports(C1, C2, _),
+    type(C2, claim).
 
-% --- STRAW MAN ---
-% Misrepresenting an opponent's position to make it easier to attack
-fallacy(Id, straw_man, 'Misrepresents or exaggerates an opponent\'s position, then attacks that distorted version.') :-
-    claim(Id, _),
-    has_feature(Id, misrepresents_opponent),
-    has_feature(Id, attacks_misrepresentation).
+% Bandwagon / appeal to popularity.
+fallacy(appeal_to_popularity, C1, C2) :-
+    type(C1, popularity_claim),
+    supports(C1, C2, _),
+    memberchk(C2Type, [claim, universal_claim, broad_rejection]),
+    type(C2, C2Type).
 
-% --- APPEAL TO AUTHORITY ---
-% Using an authority figure as evidence without proper justification
-fallacy(Id, appeal_to_authority, 'Cites an authority figure as definitive proof without sufficient supporting evidence or relevant expertise.') :-
-    claim(Id, _),
-    has_feature(Id, cites_authority),
-    ( has_feature(Id, irrelevant_authority)
-    ; has_feature(Id, no_supporting_evidence)
-    ).
+% =========================
+% Explanations
+% =========================
 
-% --- RED HERRING ---
-% Introducing irrelevant information to distract from the main issue
-fallacy(Id, red_herring, 'Introduces irrelevant information or arguments to distract from the actual issue being discussed.') :-
-    claim(Id, _),
-    has_feature(Id, topic_diversion),
-    has_feature(Id, ignores_main_issue).
-
-% ============================================================
-%  QUERY HELPERS
-% ============================================================
-
-% Find all fallacies for a given claim
-fallacies_for_claim(Id, FallacyList) :-
-    findall(F-E, fallacy(Id, F, E), FallacyList).
-
-% Find all claims that have at least one fallacy
-all_fallacious_claims(Pairs) :-
-    findall(Id-FList, (
-        claim(Id, _),
-        fallacies_for_claim(Id, FList),
-        FList \= []
-    ), Pairs).
-
-% Count total fallacies detected
-total_fallacies(Count) :-
-    findall(_, fallacy(_, _, _), L),
-    length(L, Count).
+explanation(ad_hominem, 'The argument attacks the person instead of addressing the substance of the argument.').
+explanation(hasty_generalization, 'A broad conclusion is drawn from one bad act or too little evidence.').
+explanation(false_dilemma, 'The statement presents only two options when other possibilities may exist.').
+explanation(slippery_slope, 'The argument predicts catastrophic consequences without enough support for that chain.').
+explanation(appeal_to_authority, 'The claim leans on authority alone rather than presenting supporting reasons or evidence.').
+explanation(appeal_to_popularity, 'The claim treats popularity as proof that something is true or right.').

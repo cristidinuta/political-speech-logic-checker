@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Speech Fallacy Checker</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 1080px; margin: 40px auto; padding: 0 20px; background: #f7f7f7; color: #222; }
+        h1, h2 { margin-bottom: 10px; }
+        textarea { width: 100%; min-height: 190px; padding: 12px; font-size: 16px; border: 1px solid #ccc; border-radius: 8px; resize: vertical; }
+        button { margin-top: 12px; padding: 10px 18px; font-size: 16px; border: none; border-radius: 8px; cursor: pointer; background: #222; color: white; }
+        .card { background: white; border-radius: 12px; padding: 18px; margin-top: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+        .row { padding: 10px 0; border-bottom: 1px solid #eee; }
+        .row:last-child { border-bottom: none; }
+        .tag { display: inline-block; padding: 4px 8px; margin-left: 8px; border-radius: 999px; font-size: 12px; background: #eee; }
+        .empty { color: #666; font-style: italic; }
+        code { background: #f0f0f0; padding: 2px 5px; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <h1>Speech Fallacy Checker</h1>
+    <p>Paste a speech excerpt below. This demo uses rule-based Python preprocessing and Prolog logic rules. No AI API is used.</p>
+
+    <form method="POST">
+        <textarea name="speech" placeholder="Paste a speech here...">{{ input_text }}</textarea>
+        <br>
+        <button type="submit">Analyze</button>
+    </form>
+
+    {% if claims %}
+    <div class="card">
+        <h2>Atomic Claims</h2>
+        {% for claim in claims %}
+            <div class="row">
+                <strong>{{ claim.id }}</strong>: {{ claim.text }}
+                <span class="tag">{{ claim.type }}</span>
+                <span class="tag">target: {{ claim.target }}</span>
+            </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if supports %}
+    <div class="card">
+        <h2>Claim Links</h2>
+        {% for link in supports %}
+            <div class="row">
+                <code>{{ link.claim1 }}</code> supports <code>{{ link.claim2 }}</code>
+                <span class="tag">{{ link.reason }}</span>
+            </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if fallacies %}
+    <div class="card">
+        <h2>Detected Fallacies</h2>
+        {% for item in fallacies %}
+            <div class="row">
+                <strong>{{ item.type }}</strong><br>
+                Claim 1: <code>{{ item.claim1 }}</code>
+                {% if item.claim2 %}<br>Claim 2: <code>{{ item.claim2 }}</code>{% endif %}
+                <br><br>{{ explanations.get(item.type, 'No explanation available.') }}
+            </div>
+        {% endfor %}
+    </div>
+    {% elif input_text %}
+    <div class="card">
+        <h2>Detected Fallacies</h2>
+        <p class="empty">No fallacies were flagged by the current rule set.</p>
+    </div>
+    {% endif %}
+</body>
+</html>
