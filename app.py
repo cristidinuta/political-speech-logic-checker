@@ -1,9 +1,9 @@
 """
-LogicWatch — Flask + SWI-Prolog (with DCGs), zero external API.
-NLP via Python regex patterns + Prolog DCG verification.
+LogicWatch — Flask + SWI-Prolog, zero external API.
+NLP via Python regex + Prolog DCG rule reasoning.
 """
 
-import os, re, json, subprocess, tempfile
+import os, re, subprocess, tempfile, shutil
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 
@@ -11,6 +11,9 @@ app = Flask(__name__, static_folder="static")
 CORS(app)
 
 PROLOG_KB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fallacies.pl")
+
+# Find swipl at startup — check common locations
+SWIPL = shutil.which("swipl") or "/usr/bin/swipl"
 
 FALLACY_LABELS = {
     "ad_hominem":"Ad Hominem","false_dilemma":"False Dilemma",
@@ -27,8 +30,11 @@ FALLACY_COLORS = {
 # ── Sentence splitter ──────────────────────────────────────────────────────
 def split_sentences(text):
     text = re.sub(r'\s+', ' ', text.strip())
-    # Split on sentence boundaries
-    parts = re.split(r'(?<=[.!?])\s+(?=[A-Z"])|(?<=\.)\s*(?=Furthermore|However|But |Also,|Moreover|Additionally|Therefore|Thus,|So,)', text)
+    parts = re.split(
+        r'(?<=[.!?])\s+(?=[A-Z"])'
+        r'|(?<=\.)\s*(?=Furthermore|However|But |Also,|Moreover|Additionally|Therefore|Thus,|So,)',
+        text
+    )
     sentences = []
     for i, s in enumerate(parts, 1):
         s = s.strip()
@@ -46,31 +52,26 @@ DETECTORS = {
         r"\bmy opponent\b", r"\bembezzl\b", r"\barrested\b", r"\bcriminal\b",
         r"\bcorrupt\b", r"\bliar\b", r"\bcrook\b", r"\bdishonest\b",
         r"\bscandal\b", r"\bcheat\b", r"\buntrustworthy\b", r"\bincompetent\b",
-        r"\bfraud\b", r"\bcaught\b.{0,40}\b(doing|stealing|lying|cheating)\b",
-        r"\b(he|she) (is|was|has been) (a|an)\b.{0,20}\b(criminal|liar|cheat|fraud)\b",
+        r"\bfraud\b",
     ]),
     "ignores_argument": lambda t: m(t, [
         r"\bso nothing (he|she|they) say\b",
         r"\bnothing (he|she|they) say(s)?\b.{0,40}\bcan be trusted\b",
         r"\bso (you|we) can'?t trust\b",
         r"\bcannot be trusted\b", r"\bcan'?t be trusted\b",
-        r"\bmakes? (him|her|them) unfit\b",
-        r"\bdisqualif\b",
-        r"\b(his|her|their) (word|opinion|view|advice) (is|means) nothing\b",
+        r"\bmakes? (him|her|them) unfit\b", r"\bdisqualif\b",
     ]),
     "binary_choice": lambda t: m(t, [
         r"\beither\b.{0,80}\bor\b",
         r"\byou('re| are) (with|against) (us|me)\b",
         r"\bonly two (options|choices|paths|ways)\b",
         r"\bno (other|alternative) (choice|option|way)\b",
-        r"\bit'?s (us or them|now or never|this or that)\b",
         r"\bif you (don'?t|won'?t).{0,60}then\b",
         r"\bif (we|they) don'?t.{0,60}(will|must|shall)\b",
-        r"\b(you'?re either|you are either)\b",
     ]),
     "acknowledges_alternatives": lambda t: m(t, [
-        r"\bother option\b", r"\balternative\b", r"\banother (way|approach|path)\b",
-        r"\bone possibility\b", r"\bcould also\b",
+        r"\bother option\b", r"\balternative\b",
+        r"\banother (way|approach|path)\b", r"\bone possibility\b", r"\bcould also\b",
     ]),
     "chain_of_consequences": lambda t: m(t, [
         r"\bif.{0,80}(will|would|could)\b",
@@ -102,14 +103,12 @@ DETECTORS = {
         r"\bwithout exception\b", r"\bthe (whole|entire) (country|nation|world)\b",
         r"\ball (immigrants|politicians|liberals|conservatives|people|americans)\b",
         r"\banyone who\b", r"\bwhoever\b",
-        r"\bentirely\b.{0,30}\b(destroyed|ruined|gone|failed)\b",
     ]),
     "limited_sample": lambda t: m(t, [
         r"\bone (example|case|instance|incident|person|city|town|state|worker|economist)\b",
         r"\ba (single|celebrity|famous)\b.{0,30}\b(doctor|expert|economist|scientist)\b",
         r"\bone (bad|good)\b.{0,40}\b(proves?|shows?|means?)\b",
-        r"\bone undocumented\b",
-        r"\bwe let in one\b",
+        r"\bone undocumented\b", r"\bwe let in one\b",
         r"\blast (month|week|year)\b.{0,40}\bproves?\b",
     ]),
     "misrepresents_opponent": lambda t: m(t, [
@@ -138,10 +137,8 @@ DETECTORS = {
         r"\bon (tv|television)\b.{0,40}\b(said|says|endorsed|supported)\b",
     ]),
     "irrelevant_authority": lambda t: m(t, [
-        r"\bcelebrity\b",
-        r"\bactor\b", r"\bsinger\b", r"\bathlete\b",
-        r"\bon (tv|television)\b",
-        r"\binfluencer\b", r"\bspokesperson\b",
+        r"\bcelebrity\b", r"\bactor\b", r"\bsinger\b", r"\bathlete\b",
+        r"\bon (tv|television)\b", r"\binfluencer\b", r"\bspokesperson\b",
     ]),
     "no_supporting_evidence": lambda t: (
         m(t, [
@@ -150,26 +147,23 @@ DETECTORS = {
             r"\bthat'?s (all|enough|settled|final)\b",
             r"\bcase closed\b",
             r"\bend of (story|discussion|debate)\b",
-            r"\bno (further|more) (debate|discussion|question)\b",
         ])
-        and not m(t, [r"\bdata\b", r"\bstudy\b", r"\bevidence\b", r"\bstatistic\b", r"\bresearch\b"])
+        and not m(t, [r"\bdata\b", r"\bstudy\b", r"\bevidence\b",
+                      r"\bstatistic\b", r"\bresearch\b"])
     ),
     "topic_diversion": lambda t: m(t, [
-        r"\bbut what about\b",
-        r"\bwhat about\b",
+        r"\bbut what about\b", r"\bwhat about\b",
         r"\bthe real (issue|problem|question|concern) is\b",
         r"\bwhat voters (really|actually) care about\b",
         r"\blook at (how|what|the)\b",
         r"\binstead (let'?s|we should) (talk|focus|think) about\b",
         r"\bmore importantly\b",
-        r"\blet'?s (talk|focus) about (the real|what really)\b",
     ]),
     "ignores_main_issue": lambda t: m(t, [
         r"\bthat is why.{0,80}(can'?t|cannot|won'?t|should not|could not)\b",
         r"\bso (we|you) (can'?t|cannot|won'?t|should not) (afford|consider|support|do|allow)\b",
         r"\bthat'?s why.{0,80}(can'?t|cannot|won'?t|should not)\b",
-        # also catch when topic diversion sentence itself drops main topic
-        r"\b(pothole|traffic|weather|sports)\b",
+        r"\b(pothole|traffic|sports)\b",
     ]),
 }
 
@@ -209,17 +203,22 @@ def run_prolog(claims, features):
    halt.
 """
     with tempfile.NamedTemporaryFile(mode="w", suffix=".pl", delete=False, prefix="lw_") as f:
-        f.write(script); tmp = f.name
+        f.write(script)
+        tmp = f.name
+
     try:
-        out = subprocess.run(
-            ["swipl", "-q", "-s", tmp],
+        result = subprocess.run(
+            [SWIPL, "-q", "-s", tmp],
             capture_output=True, text=True, timeout=30
-        ).stdout
+        )
+        if result.returncode != 0 and result.stderr:
+            app.logger.error(f"Prolog stderr: {result.stderr[:500]}")
+        out = result.stdout
     finally:
         os.unlink(tmp)
 
     fallacy_map = {c["id"]: [] for c in claims}
-    seen = {}  # deduplicate fallacies per claim
+    seen = {}
     for line in out.splitlines():
         if line.startswith("FALLACY|"):
             parts = line.split("|", 3)
@@ -268,7 +267,21 @@ def index():
 
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok"})
+    return jsonify({"status": "ok", "swipl": SWIPL})
+
+@app.route("/debug", methods=["POST"])
+def debug():
+    """Returns raw features detected per sentence — useful for testing."""
+    data = request.get_json()
+    speech = (data.get("speech") or "").strip()
+    if not speech:
+        return jsonify({"error": "No speech provided"}), 400
+    claims = split_sentences(speech)
+    features = {c["id"]: detect_features(c["text"]) for c in claims}
+    return jsonify({
+        "swipl_path": SWIPL,
+        "claims": [{"id": c["id"], "text": c["text"], "features": features[c["id"]]} for c in claims]
+    })
 
 @app.route("/analyze", methods=["POST"])
 def analyze():
@@ -284,9 +297,12 @@ def analyze():
         return jsonify(run_prolog(claims, features))
     except subprocess.TimeoutExpired:
         return jsonify({"error": "Prolog reasoning timed out"}), 500
+    except FileNotFoundError:
+        return jsonify({"error": f"SWI-Prolog not found at '{SWIPL}'. Check Dockerfile."}), 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
+    print(f"swipl found at: {SWIPL}")
     app.run(debug=False, host="0.0.0.0", port=port)
