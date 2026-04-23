@@ -5,11 +5,11 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app.py .
 COPY fallacies.pl .
+COPY static/ static/
 
 CMD gunicorn app:app --bind 0.0.0.0:${PORT:-5000} --workers 2 --timeout 60
