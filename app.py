@@ -15,16 +15,10 @@ app = Flask(__name__)
 
 
 def _prolog_path(path: Path) -> str:
-    """Return a Prolog-friendly absolute path string."""
     return path.resolve().as_posix()
 
 
 def run_prolog_analysis(facts_text: str):
-    """Load generated facts + rules and return claims, support links, fallacies, and explanations.
-
-    A temporary facts file is used per request so the app is safe to run on Render
-    without requests overwriting a shared speech_facts.pl file.
-    """
     with tempfile.NamedTemporaryFile(
         mode="w",
         suffix=".pl",
@@ -42,22 +36,28 @@ def run_prolog_analysis(facts_text: str):
         prolog.consult(_prolog_path(temp_facts_path))
 
         claims = []
+        claim_lookup = {}
         for result in prolog.query("claim(ID), text(ID, Text), type(ID, Type), target(ID, Target)"):
-            claims.append(
-                {
-                    "id": str(result["ID"]),
-                    "text": str(result["Text"]),
-                    "type": str(result["Type"]),
-                    "target": str(result["Target"]),
-                }
-            )
+            cid = str(result["ID"])
+            row = {
+                "id": cid,
+                "text": str(result["Text"]),
+                "type": str(result["Type"]),
+                "target": str(result["Target"]),
+            }
+            claims.append(row)
+            claim_lookup[cid] = row["text"]
 
         supports = []
         for result in prolog.query("supports(C1, C2, Reason)"):
+            c1 = str(result["C1"])
+            c2 = str(result["C2"])
             supports.append(
                 {
-                    "claim1": str(result["C1"]),
-                    "claim2": str(result["C2"]),
+                    "claim1": c1,
+                    "claim2": c2,
+                    "claim1_text": claim_lookup.get(c1, c1),
+                    "claim2_text": claim_lookup.get(c2, c2),
                     "reason": str(result["Reason"]),
                 }
             )
@@ -69,13 +69,29 @@ def run_prolog_analysis(facts_text: str):
             row = (str(result["Type"]), str(result["C1"]), str(result["C2"]))
             if row not in seen:
                 seen.add(row)
-                fallacies.append({"type": row[0], "claim1": row[1], "claim2": row[2]})
+                fallacies.append(
+                    {
+                        "type": row[0],
+                        "claim1_id": row[1],
+                        "claim2_id": row[2],
+                        "claim1_text": claim_lookup.get(row[1], row[1]),
+                        "claim2_text": claim_lookup.get(row[2], row[2]),
+                    }
+                )
 
         for result in prolog.query("fallacy(Type, C1)"):
             row = (str(result["Type"]), str(result["C1"]), None)
             if row not in seen:
                 seen.add(row)
-                fallacies.append({"type": row[0], "claim1": row[1], "claim2": None})
+                fallacies.append(
+                    {
+                        "type": row[0],
+                        "claim1_id": row[1],
+                        "claim2_id": None,
+                        "claim1_text": claim_lookup.get(row[1], row[1]),
+                        "claim2_text": None,
+                    }
+                )
 
         explanations = {}
         for result in prolog.query("explanation(Type, Message)"):
@@ -87,6 +103,11 @@ def run_prolog_analysis(facts_text: str):
             temp_facts_path.unlink(missing_ok=True)
         except OSError:
             pass
+
+
+@app.route("/health")
+def health():
+    return {"status": "ok"}, 200
 
 
 @app.route("/", methods=["GET", "POST"])

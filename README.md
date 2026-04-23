@@ -25,23 +25,16 @@ This project analyzes short speech excerpts using:
    ```
 
 ## Render deployment
-This app is easiest to deploy on Render as a **Docker web service** because it needs the OS-level package `swi-prolog`.
+This app is set up for a Docker web service on Render because it needs the OS-level package `swi-prolog`.
 
-### Option A: use `render.yaml`
-Push this folder to GitHub and create a new Blueprint on Render. Render will detect `render.yaml` and build from the included `Dockerfile`.
-
-### Option B: create the service manually
-- Service type: **Web Service**
-- Runtime: **Docker**
-- Dockerfile path: `./Dockerfile`
-
-### Why Docker here?
-The Python runtime on Render is great for pure Python apps, but this project also depends on SWI-Prolog. The included Dockerfile installs that dependency and starts the app with Gunicorn.
-
-## Production notes
-- The app writes per-request Prolog facts into `/tmp`, which is safe for Render's ephemeral filesystem.
-- It no longer relies on a shared `speech_facts.pl` file, so concurrent requests won't overwrite each other.
-- Gunicorn is configured conservatively with one worker because PySwip / SWI-Prolog integrations are safer with a simple process model.
+### Deploy
+- Push this folder to GitHub.
+- Create a new **Web Service** on Render.
+- Choose **Docker** runtime.
+- Render will build from the included `Dockerfile`.
 
 ## Notes
-This is a transparent rule-based demo. It flags **possible** fallacies and works best on short, explicit speech excerpts.
+- Uses one Gunicorn worker for safer PySwip/SWI-Prolog behavior.
+- Writes generated Prolog facts to `/tmp` per request.
+- Includes `/health` for a simple health check.
+- Displays full claim text in the UI, not just IDs.
