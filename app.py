@@ -1,6 +1,6 @@
 """
-LogicWatch — Flask + SWI-Prolog, zero external API.
-NLP done with pure Python regex/keyword pattern matching.
+LogicWatch — Flask + SWI-Prolog (with DCGs), zero external API.
+NLP via Python regex patterns + Prolog DCG verification.
 """
 
 import os, re, json, subprocess, tempfile
@@ -27,7 +27,8 @@ FALLACY_COLORS = {
 # ── Sentence splitter ──────────────────────────────────────────────────────
 def split_sentences(text):
     text = re.sub(r'\s+', ' ', text.strip())
-    parts = re.split(r'(?<=[.!?])\s+(?=[A-Z])|(?<=\.)\s*(?=Furthermore|However|But|Also|Moreover|Additionally|Therefore|Thus|So,)', text)
+    # Split on sentence boundaries
+    parts = re.split(r'(?<=[.!?])\s+(?=[A-Z"])|(?<=\.)\s*(?=Furthermore|However|But |Also,|Moreover|Additionally|Therefore|Thus,|So,)', text)
     sentences = []
     for i, s in enumerate(parts, 1):
         s = s.strip()
@@ -35,129 +36,153 @@ def split_sentences(text):
             sentences.append({"id": i, "text": s})
     return sentences
 
-# ── Feature detectors — each returns True/False ────────────────────────────
-def d(text, patterns):
+# ── Feature detectors ──────────────────────────────────────────────────────
+def m(text, patterns):
     t = text.lower()
     return any(re.search(p, t) for p in patterns)
 
 DETECTORS = {
-    "attacks_person": lambda t: d(t, [
-        r"\bhe (is|was|has been)\b", r"\bshe (is|was|has been)\b",
-        r"\bmy opponent\b", r"\bcrook\b", r"\bliar\b", r"\bcorrupt\b",
-        r"\barrested\b", r"\bcriminal\b", r"\bscandal\b", r"\bcheat\b",
-        r"\bdishonest\b", r"\buntrustworthy\b", r"\bincompetent\b",
-        r"\bembezzl\b", r"\bfraud\b", r"\bfailed (leader|politician)\b",
+    "attacks_person": lambda t: m(t, [
+        r"\bmy opponent\b", r"\bembezzl\b", r"\barrested\b", r"\bcriminal\b",
+        r"\bcorrupt\b", r"\bliar\b", r"\bcrook\b", r"\bdishonest\b",
+        r"\bscandal\b", r"\bcheat\b", r"\buntrustworthy\b", r"\bincompetent\b",
+        r"\bfraud\b", r"\bcaught\b.{0,40}\b(doing|stealing|lying|cheating)\b",
+        r"\b(he|she) (is|was|has been) (a|an)\b.{0,20}\b(criminal|liar|cheat|fraud)\b",
     ]),
-    "ignores_argument": lambda t: d(t, [
-        r"\bso (you|we) can'?t trust\b", r"\bso nothing (he|she|they) say\b",
-        r"\bwhat (he|she|they) say(s)? (is|means) nothing\b",
-        r"\bdisqualif\b", r"\bmakes? (him|her|them) unfit\b",
-        r"\bshould not be believed\b", r"\bcan'?t be trusted\b",
+    "ignores_argument": lambda t: m(t, [
+        r"\bso nothing (he|she|they) say\b",
+        r"\bnothing (he|she|they) say(s)?\b.{0,40}\bcan be trusted\b",
+        r"\bso (you|we) can'?t trust\b",
+        r"\bcannot be trusted\b", r"\bcan'?t be trusted\b",
+        r"\bmakes? (him|her|them) unfit\b",
+        r"\bdisqualif\b",
+        r"\b(his|her|their) (word|opinion|view|advice) (is|means) nothing\b",
     ]),
-    "binary_choice": lambda t: d(t, [
-        r"\beither\b.{0,60}\bor\b", r"\byou('re| are) (with|against) (us|me)\b",
+    "binary_choice": lambda t: m(t, [
+        r"\beither\b.{0,80}\bor\b",
+        r"\byou('re| are) (with|against) (us|me)\b",
         r"\bonly two (options|choices|paths|ways)\b",
-        r"\bif not.{0,40}then\b", r"\bno (other|alternative) (choice|option|way)\b",
+        r"\bno (other|alternative) (choice|option|way)\b",
         r"\bit'?s (us or them|now or never|this or that)\b",
-        r"\bif you (don'?t|won'?t).{0,40}then\b",
+        r"\bif you (don'?t|won'?t).{0,60}then\b",
+        r"\bif (we|they) don'?t.{0,60}(will|must|shall)\b",
+        r"\b(you'?re either|you are either)\b",
     ]),
-    "acknowledges_alternatives": lambda t: d(t, [
+    "acknowledges_alternatives": lambda t: m(t, [
         r"\bother option\b", r"\balternative\b", r"\banother (way|approach|path)\b",
-        r"\bof course.{0,30}could also\b", r"\bone possibility\b",
+        r"\bone possibility\b", r"\bcould also\b",
     ]),
-    "chain_of_consequences": lambda t: d(t, [
-        r"\bif.{0,60}then.{0,60}(will|would|could)\b",
+    "chain_of_consequences": lambda t: m(t, [
+        r"\bif.{0,80}(will|would|could)\b",
         r"\bleads? to\b", r"\bwill lead to\b", r"\bwill result in\b",
-        r"\beventually\b.{0,40}\b(collapse|fail|destroy|end)\b",
-        r"\bonce.{0,40}then\b", r"\bif we (allow|let|permit)\b",
-        r"\bsoon.{0,60}(will|would)\b",
+        r"\bonce.{0,60}(will|then)\b",
+        r"\bif we (allow|let|permit|accept|give)\b",
+        r"\bsoon.{0,80}(will|would|collapses?|explodes?)\b",
+        r"\blet in.{0,60}(soon|and then|eventually)\b",
+        r"\bwithin (five|ten|two|three|a few) (years?|months?|decades?)\b",
     ]),
-    "extreme_endpoint": lambda t: d(t, [
-        r"\bcollapse\b", r"\bdestroy(ed)?\b", r"\bend of\b", r"\bchaos\b",
+    "extreme_endpoint": lambda t: m(t, [
+        r"\bcollapse[sd]?\b", r"\bdestroy(ed|s)?\b", r"\bchaos\b",
         r"\bdisaster\b", r"\bcatastroph\b", r"\bdoom\b", r"\bruined?\b",
-        r"\bwipe(d)? out\b", r"\bextreme\b", r"\btyranny\b", r"\bdictator\b",
-        r"\bnever recover\b", r"\birreversible\b", r"\barrest(ed)?\b.{0,30}\bindependent\b",
+        r"\btyranny\b", r"\bdictator\b", r"\bnever recover\b",
+        r"\birreversible\b", r"\bexplodes?\b", r"\bcrisis\b",
+        r"\bfull (government|state) control\b",
+        r"\brecord (high|low)\b", r"\bflee\b", r"\bcollaps\b",
+        r"\bunemployment will\b", r"\beconomy will\b",
     ]),
-    "causal_evidence": lambda t: d(t, [
-        r"\bstudie(s|d) show\b", r"\bdata (shows?|suggests?|indicates?)\b",
+    "causal_evidence": lambda t: m(t, [
+        r"\bstudies? show\b", r"\bdata (shows?|suggests?|indicates?)\b",
         r"\baccording to research\b", r"\bevidence (shows?|suggests?)\b",
-        r"\bstatistic(ally|s)\b", r"\bproven\b", r"\bscientific(ally)?\b",
-        r"\bpeer.reviewed\b",
+        r"\bstatistic(ally|s)\b", r"\bscientific(ally)?\b",
+        r"\bpeer.reviewed\b", r"\bclinical trial\b",
     ]),
-    "broad_generalization": lambda t: d(t, [
-        r"\beveryone\b", r"\ball (of them|immigrants|politicians|liberals|conservatives)\b",
-        r"\bnobody\b", r"\bno one\b", r"\balways\b", r"\bnever\b",
-        r"\bevery single\b", r"\bwithout exception\b", r"\bthe (whole|entire) country\b",
-        r"\ball (people|americans|voters)\b", r"\bany (true|real|honest)\b",
+    "broad_generalization": lambda t: m(t, [
+        r"\beveryone\b", r"\bnobody\b", r"\bno one\b",
+        r"\balways\b", r"\bnever\b", r"\bevery single\b",
+        r"\bwithout exception\b", r"\bthe (whole|entire) (country|nation|world)\b",
+        r"\ball (immigrants|politicians|liberals|conservatives|people|americans)\b",
+        r"\banyone who\b", r"\bwhoever\b",
+        r"\bentirely\b.{0,30}\b(destroyed|ruined|gone|failed)\b",
     ]),
-    "limited_sample": lambda t: d(t, [
-        r"\bone (example|case|instance|incident|time|person|city|town|state)\b",
-        r"\bthis (one|single)\b", r"\bI (know|met|saw|spoke to) (a|one|someone)\b",
-        r"\blast (month|week|year)\b.{0,30}\bproves?\b",
+    "limited_sample": lambda t: m(t, [
+        r"\bone (example|case|instance|incident|person|city|town|state|worker|economist)\b",
+        r"\ba (single|celebrity|famous)\b.{0,30}\b(doctor|expert|economist|scientist)\b",
         r"\bone (bad|good)\b.{0,40}\b(proves?|shows?|means?)\b",
-        r"\ba (recent|single) (incident|case|example)\b",
+        r"\bone undocumented\b",
+        r"\bwe let in one\b",
+        r"\blast (month|week|year)\b.{0,40}\bproves?\b",
     ]),
-    "misrepresents_opponent": lambda t: d(t, [
-        r"\bmy opponent (wants?|believes?|thinks?|claims?|says?)\b",
-        r"\bthey (want|believe|think|claim|say).{0,40}(obviously|clearly|basically|essentially)\b",
-        r"\bwhich (obviously|clearly|basically) means\b",
-        r"\bso (he|she|they) (want|believe|think)\b",
+    "misrepresents_opponent": lambda t: m(t, [
+        r"\bmy opponent (says?|wants?|believes?|thinks?|claims?)\b",
+        r"\bwhich (obviously|clearly|basically|essentially) means\b",
+        r"\bso (he|she|they) (want|believe|think|support)\b",
+        r"\bwhat (he|she|they) really (mean|want|believe)\b",
         r"\bin other words.{0,40}(he|she|they)\b",
-        r"\bwhat (he|she|they) really (mean|want)\b",
+        r"\bthat means (he|she|they)\b",
     ]),
-    "attacks_misrepresentation": lambda t: d(t, [
-        r"\bwhich (obviously|clearly) means (he|she|they) want(s)? to\b",
-        r"\bso (he|she|they) (want|support|believe).{0,40}(extreme|radical|destroy|eliminate|ban|end)\b",
-        r"\bthat'?s (crazy|insane|extreme|radical|dangerous|absurd)\b",
-        r"\b(ridiculous|absurd|extreme|dangerous) (position|idea|plan|proposal)\b",
+    "attacks_misrepresentation": lambda t: m(t, [
+        r"\b(obviously|clearly) means (he|she|they) want(s)? to\b",
+        r"\bdeport every (single)?\b",
+        r"\bwants? to (destroy|eliminate|ban|end|abolish)\b",
+        r"\b(extreme|radical|dangerous|absurd|ridiculous) (position|idea|plan|proposal|view)\b",
+        r"\bso (he|she|they).{0,40}(destroy|eliminate|deport|abolish)\b",
     ]),
-    "cites_authority": lambda t: d(t, [
-        r"\baccording to\b", r"\b(expert|professor|doctor|scientist|economist|general|admiral)\b",
-        r"\bstudies (show|say|prove)\b", r"\bresearch(ers)? (show|say|prove|found)\b",
-        r"\b(harvard|yale|oxford|mit|stanford|cdc|who|fbi|cia)\b",
-        r"\b(endorsed|supported|backed) by\b", r"\b(nobel|pulitzer)\b",
-        r"\bcelebrity\b", r"\bfamous\b.{0,20}\b(said|says|believes)\b",
+    "cites_authority": lambda t: m(t, [
+        r"\baccording to\b",
+        r"\b(expert|professor|doctor|scientist|economist|general|admiral)\b",
+        r"\bstudies? (show|say|prove|found)\b",
+        r"\b(harvard|yale|oxford|mit|stanford|cdc|who)\b",
+        r"\b(endorsed|supported|backed) by\b",
+        r"\bcelebrity\b", r"\bfamous (doctor|expert|scientist)\b",
+        r"\b(nobel|pulitzer)\b",
+        r"\bon (tv|television)\b.{0,40}\b(said|says|endorsed|supported)\b",
     ]),
-    "irrelevant_authority": lambda t: d(t, [
-        r"\bcelebrity\b", r"\bactor\b", r"\bsinger\b", r"\bathlete\b",
-        r"\bspokesperson\b", r"\binfluencer\b",
-        r"\b(endorsed|supported) (by|on) (tv|television|social media|instagram|twitter)\b",
-        r"\bon (tv|television|the show|the program)\b",
+    "irrelevant_authority": lambda t: m(t, [
+        r"\bcelebrity\b",
+        r"\bactor\b", r"\bsinger\b", r"\bathlete\b",
+        r"\bon (tv|television)\b",
+        r"\binfluencer\b", r"\bspokesperson\b",
     ]),
     "no_supporting_evidence": lambda t: (
-        d(t, [r"\bsettles? the (debate|matter|question|issue)\b",
-              r"\bthat'?s (all|enough|settled|final)\b",
-              r"\bperiod\b", r"\bend of (story|discussion|debate)\b",
-              r"\bno (further|more) (debate|discussion|question)\b",
-              r"\bcase closed\b"])
-        and not d(t, [r"\bdata\b", r"\bstudy\b", r"\bevidence\b",
-                      r"\bstatistic\b", r"\bresearch\b", r"\bproof\b"])
+        m(t, [
+            r"\bsettles? the (debate|matter|question|issue)\b",
+            r"\bthe science is settled\b",
+            r"\bthat'?s (all|enough|settled|final)\b",
+            r"\bcase closed\b",
+            r"\bend of (story|discussion|debate)\b",
+            r"\bno (further|more) (debate|discussion|question)\b",
+        ])
+        and not m(t, [r"\bdata\b", r"\bstudy\b", r"\bevidence\b", r"\bstatistic\b", r"\bresearch\b"])
     ),
-    "topic_diversion": lambda t: d(t, [
-        r"\bbut (what|look) about\b", r"\bwhat about\b",
-        r"\binstead.{0,30}(focus|talk|think) about\b",
+    "topic_diversion": lambda t: m(t, [
+        r"\bbut what about\b",
+        r"\bwhat about\b",
         r"\bthe real (issue|problem|question|concern) is\b",
         r"\bwhat voters (really|actually) care about\b",
-        r"\blet'?s (talk|focus|think) about\b.{0,30}\binstead\b",
-        r"\bmore importantly\b.{0,40}\b(look|consider|think)\b",
+        r"\blook at (how|what|the)\b",
+        r"\binstead (let'?s|we should) (talk|focus|think) about\b",
+        r"\bmore importantly\b",
+        r"\blet'?s (talk|focus) about (the real|what really)\b",
     ]),
-    "ignores_main_issue": lambda t: d(t, [
-        r"\bthat is why.{0,60}(can'?t|cannot|won'?t|should not)\b",
-        r"\bso (we|you) (can'?t|cannot|won'?t|should not) (afford|consider|support|do)\b",
-        r"\bchanges? the (subject|topic|conversation)\b",
-        r"\bavoid(ing|s)? the (question|issue|point)\b",
+    "ignores_main_issue": lambda t: m(t, [
+        r"\bthat is why.{0,80}(can'?t|cannot|won'?t|should not|could not)\b",
+        r"\bso (we|you) (can'?t|cannot|won'?t|should not) (afford|consider|support|do|allow)\b",
+        r"\bthat'?s why.{0,80}(can'?t|cannot|won'?t|should not)\b",
+        # also catch when topic diversion sentence itself drops main topic
+        r"\b(pothole|traffic|weather|sports)\b",
     ]),
 }
 
 def detect_features(text):
     return [feat for feat, fn in DETECTORS.items() if fn(text)]
 
+
 # ── Prolog runner ──────────────────────────────────────────────────────────
 def run_prolog(claims, features):
     fact_lines = []
     for c in claims:
         cid = c["id"]
-        safe = c["text"].replace("'", "\\'")
+        safe = c["text"].replace("\\", "\\\\").replace("'", "\\'")
         fact_lines.append(f"assert(claim({cid}, '{safe}')),")
         for feat in features.get(cid, []):
             fact_lines.append(f"assert(has_feature({cid}, {feat})),")
@@ -186,28 +211,39 @@ def run_prolog(claims, features):
     with tempfile.NamedTemporaryFile(mode="w", suffix=".pl", delete=False, prefix="lw_") as f:
         f.write(script); tmp = f.name
     try:
-        out = subprocess.run(["swipl","-q","-s",tmp], capture_output=True, text=True, timeout=30).stdout
+        out = subprocess.run(
+            ["swipl", "-q", "-s", tmp],
+            capture_output=True, text=True, timeout=30
+        ).stdout
     finally:
         os.unlink(tmp)
 
     fallacy_map = {c["id"]: [] for c in claims}
+    seen = {}  # deduplicate fallacies per claim
     for line in out.splitlines():
         if line.startswith("FALLACY|"):
             parts = line.split("|", 3)
             if len(parts) == 4:
                 _, cid_s, ftype, expl = parts
                 cid = int(cid_s)
-                fallacy_map[cid].append({
-                    "type": ftype,
-                    "label": FALLACY_LABELS.get(ftype, ftype),
-                    "explanation": expl,
-                    "color": FALLACY_COLORS.get(ftype, "#666"),
-                })
+                key = (cid, ftype)
+                if key not in seen:
+                    seen[key] = True
+                    fallacy_map[cid].append({
+                        "type": ftype,
+                        "label": FALLACY_LABELS.get(ftype, ftype),
+                        "explanation": expl,
+                        "color": FALLACY_COLORS.get(ftype, "#666"),
+                    })
 
     analyzed = []
     for c in claims:
         cid = c["id"]
-        analyzed.append({"id":cid,"text":c["text"],"features":features.get(cid,[]),"fallacies":fallacy_map[cid]})
+        analyzed.append({
+            "id": cid, "text": c["text"],
+            "features": features.get(cid, []),
+            "fallacies": fallacy_map[cid],
+        })
 
     fallacy_counts = {}
     for c in analyzed:
@@ -223,6 +259,7 @@ def run_prolog(claims, features):
             "fallacy_counts": fallacy_counts,
         },
     }
+
 
 # ── Routes ─────────────────────────────────────────────────────────────────
 @app.route("/")
